@@ -278,35 +278,6 @@ class FeedForwardBlock(tfnn.Layer):
 
 
         
-## Temp : pour pouvoir faire des tests unitaires
-examples, metadata = tfds.load('ted_hrlr_translate/pt_to_en', with_info=True,
-                               as_supervised=True)
-train_examples, val_examples = examples['train'], examples['validation']
-
-model_name = "ted_hrlr_translate_pt_en_converter"
-tf.keras.utils.get_file(
-    f"{model_name}.zip",
-    f"https://storage.googleapis.com/download.tensorflow.org/models/{model_name}.zip",
-    cache_dir='.', cache_subdir='', extract=True
-)
-
-tokenizers = tf.saved_model.load(model_name)
-
-t_b = TokenizerBlock(tokenizers.pt, tokenizers.en)
-
-ds = t_b.prepare_dataset(train_examples)
-
-
-for pt, en in ds.take(1):
-    print(pt)
-    print()
-    print(en)
-    
-
-test = EmbeddingBlock()
-print(test.position_embedding())
-
-print('finished')
 
 
 
