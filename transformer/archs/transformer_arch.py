@@ -18,20 +18,20 @@ AUTOTUNE = tf.data.AUTOTUNE
 BATCH_SIZE = 32
 BUFFER_SIZE = 20000
 EMBEDDING_DIM = 512
-MAX_SEQ_LENGTH = 60
+MAX_SEQ_LENGTH = 200
 INPUT_VOCAB_SIZE = 8500
 TARGET_VOCAB_SIZE = 8000
 
 # Les autres ne sont pas globaux, et devront être passés en param : num_heads, dff
+n_heads = 8
 
 
-
-## Vrai code
+## Blocks
 
 class TokenizerBlock:
     
     def __init__(self, tokenizer_a, tokenizer_b):
-        """les deux tokenizers doivent avoir la methode .tokenize qui renvoie le ragged tensor des mots tokenisé
+        """les deux tokenizers doivent avoir la methode .tokenize qui renvoie le ragged tensor des mots tokenisés
 
         Args:
             tokenizer_a ([type]): [description]
@@ -103,31 +103,43 @@ class EmbeddingBlock(tfnn.Layer):
     @staticmethod
     def vector_angles(pos, i):
         temp = 1 / tf.math.pow(10000, (2 * (i//2)) / np.float32(EMBEDDING_DIM))
-        return tf.linalg.matmul(pos, temp) # multiplie shape [MAX_SEQ_LENGTH, 1] par [1, EMBEDDING_DIM]
+        return tf.linalg.matmul(pos, temp) # multiplie shape [seq_length, 1] par [1, EMBEDDING_DIM]
     
-    def position_embedding(self):
+    def position_embedding(self, seq_length):
+        """creer la matrices des positions embedding d'UNE sequence, donc on obtient la shape
+        [seq_length, EMBEDDING_DIM], reste à la tile dans le call pour obtenir [BATCH_SIZE, seq_length, EMBEDDING_DIM]
+
+        Args:
+            seq_length ([type]): [description]
+
+        Returns:
+            [type]: [description]
+        """
         
         embedding_idx = tf.range(start = 0, limit = EMBEDDING_DIM, dtype = tf.float32)
         embedding_idx = tf.expand_dims(embedding_idx, 0) # shape [1, EMBEDDING_DIM]
 
-        pos = tf.range(start = 0, limit = MAX_SEQ_LENGTH, dtype = tf.float32)
-        pos = tf.expand_dims(pos, -1) # shape [MAX_SEQ_LENGTH, 1]
+        pos = tf.range(start = 0, limit = seq_length, dtype = tf.float32)
+        pos = tf.expand_dims(pos, -1) # shape [seq_length, 1]
         
         angles = self.vector_angles(pos, embedding_idx)
         
         cond = tf.constant([True, False])
         cond = tf.expand_dims(cond, -1)
-        cond = tf.tile(cond, tf.constant([ceil(EMBEDDING_DIM // 2) , MAX_SEQ_LENGTH]))
-        cond = tf.transpose(cond) # shape [MAX_SEQ_LENGTH, EMBEDDING_DIM]
+        cond = tf.tile(cond, tf.constant([ceil(EMBEDDING_DIM // 2) , seq_length]))
+        cond = tf.transpose(cond) # shape [seq_length, EMBEDDING_DIM]
         
-        return tf.where(cond, tf.math.sin(angles), tf.math.cos(angles)) # [MAX_SEQ_LENGTH, EMBEDDING_DIM]
+        return tf.where(cond, tf.math.sin(angles), tf.math.cos(angles)) # [seq_length, EMBEDDING_DIM]
         
     def call(self, tok):
         
         tok = self.token_embedding(tok)
-        out = self.position_embedding()
+        out = self.position_embedding(tok.get_shape()[-2]) # seq_length est à la -2e position
         
-        out = out + tok # il n'ont pas la meme shape, peut etre erreur
+        out = tf.expand_dims(out, axis = 0) # il faudrait trouver un moyen de cache ces position_embedding, meme si elles changent à chaque seq car seq_length change, il faudrait les compute avec MAX_SEQ_LENGTH puis tronquer
+        out = tf.tile(out, tf.constant([BATCH_SIZE, 1, 1]))
+        
+        out = out + tok # rectfié -> il n'ont pas la meme shape, peut etre erreur
         
         return out
         
@@ -175,7 +187,7 @@ class AttentionBlock(tfnn.Layer):
         Args:
             seq_length ([type]): [description]
         """
-        inp = tf.ones([seq_length])
+        inp = tf.ones([seq_length, seq_length]) # ne marche que pour une matrice pour une meme seq, pas pour une seq en langue a , et l'autre en b
                                             #garde tous les 1 du bas
         msk = 1 - tf.linalg.band_part(inp, num_lower = -1, num_upper = 0)
         
@@ -196,7 +208,7 @@ class AttentionBlock(tfnn.Layer):
         out = out / tf.math.sqrt(embedding_dim)
         
         if mask is not None:
-            out = out + mask * (- 1e9) # met un 'poids' de 'moins l'infini' aux endroits du mask ayant un 1
+            out = out + mask * (- 1e9) # met un 'poids' de 'moins l'infini' aux endroits du mask ayant un 1 ie les interdits ou <pad>
         
         att = tf.nn.softmax(out, axis = -1)
         out = tf.linalg.matmul(att, v)
@@ -219,9 +231,9 @@ class AttentionBlock(tfnn.Layer):
     def call(self, q, k, v, mask):
         
         # les inp passent par les memes layers pour chaque head
-        out_q = tf.linalg.matmul(q, self.w_q) + self.b_q
-        out_k = tf.linalg.matmul(k, self.w_k) + self.b_k
-        out_v = tf.linalg.matmul(v, self.w_v) + self.b_v
+        q = tf.linalg.matmul(q, self.w_q) + self.b_q
+        k = tf.linalg.matmul(k, self.w_k) + self.b_k
+        v = tf.linalg.matmul(v, self.w_v) + self.b_v
         
         # split 
         q = self.split_embedding_into_heads(q)
@@ -229,7 +241,7 @@ class AttentionBlock(tfnn.Layer):
         v = self.split_embedding_into_heads(v)
         
         # formule de l'attention
-        out, att = self.scale_dot_product_with_mask(out_q, out_k, out_v, mask) # out shape : [b, nh, s, e] ; att shape : [b, nh, s, s]
+        out, att = self.scale_dot_product_with_mask(q, k, v, mask) # out shape : [b, nh, s, e] ; att shape : [b, nh, s, s]
         
         # un-split de l'out
         out = tf.transpose(out, perm = [0, 2, 1, 3]) # out shape : [b, s, nh, e]
