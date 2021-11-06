@@ -67,10 +67,10 @@ class TokenizerBlock:
 
         
 
-class EmbeddingBlock0(tfnn.Layer):
+class EmbeddingBlock_0(tfnn.Layer):
     def __init__(self):
         
-        super(EmbeddingBlock0, self).__init__()
+        super(EmbeddingBlock_0, self).__init__()
     
     
     @staticmethod    
@@ -89,13 +89,12 @@ class EmbeddingBlock0(tfnn.Layer):
         return self.inside_sine_cosine()
         
 
-# test = EmbeddingBlock0()
-# print(test.position_embedding())
-        
+
 
 
 
 class EmbeddingBlock(tfnn.Layer):
+    
     def __init__(self):
         
         super(EmbeddingBlock, self).__init__()

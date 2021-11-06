@@ -48,43 +48,61 @@ tokenizers = tf.saved_model.load(model_name)
 
 
 
-# creation instances
+# tests TokenizerBlock
 
-# TokenizerBlock
+
+
+
+
 t_b = arch.TokenizerBlock(tokenizers.pt, tokenizers.en)
 
-
-
-
-
-# prints
 ds = t_b.prepare_dataset(train_examples)
-print()
-
-print(ds)
-print()
-
-print('n_batches :', ds.cardinality())
-print()
-
-for pt, en in ds.take(1):
-    print(pt)
-    print()
-    print(en)
-    print()
-
-
 
 
 # tests
 
-class Test_TokenizerBlock_Test(unittest.TestCase):
+class Test_TokenizerBlock(unittest.TestCase):
     
+    @classmethod
+    def setUpClass(cls):
+        """va run ça avant de faire les tests
+        """
+        cls.t_b = arch.TokenizerBlock(tokenizers.pt, tokenizers.en)
+        cls.ds = cls.t_b.prepare_dataset(train_examples)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        pass
+
+    def setUp(self):
+        pass
+    
+    def tearDown(self) -> None:
+        pass
+        
     def test_prepare_dataset(self):
-        self.assertEqual(tf.shape(t_b.prepare_dataset(train_examples).take(1)), BATCH_SIZE)
-    
-    # def test_increment(self):
-    #     self.assertEqual(3, 4)
+        
+        for pt, en in self.ds.take(1):
+            print(pt)
+            print()
+            
+            print(en)
+            print()
+            
+            self.assertEqual(pt.shape.as_list()[0], BATCH_SIZE)
+            self.assertEqual(len(pt.shape.as_list()), 2)
+
+
+
+
+
+# tests EmbeddingBlock
+
+
+
+
+
+# print
 
     
     
@@ -100,21 +118,6 @@ class Test_TokenizerBlock_Test(unittest.TestCase):
 
 
 
-# t_b = TokenizerBlock(tokenizers.pt, tokenizers.en)
-
-# ds = t_b.prepare_dataset(train_examples)
-
-
-# for pt, en in ds.take(1):
-#     print(pt)
-#     print()
-#     print(en)
-    
-
-# test = EmbeddingBlock()
-# print(test.position_embedding())
-
-# print('finished')
 
 
 
