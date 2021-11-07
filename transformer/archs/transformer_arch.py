@@ -21,6 +21,7 @@ EMBEDDING_DIM = 512
 MAX_SEQ_LENGTH = 200
 INPUT_VOCAB_SIZE = 8500
 TARGET_VOCAB_SIZE = 8000
+EPS_LAYERNORM = 1e-6
 
 # Les autres ne sont pas globaux, et devront être passés en param : num_heads, dff
 n_heads = 8
@@ -116,6 +117,7 @@ class EmbeddingBlock(tfnn.Layer):
             [type]: [description]
         """
         
+        #TODO : faire en sorte que la pos embedding ne soit qu'une troncature, evite de le recalculer
         embedding_idx = tf.range(start = 0, limit = EMBEDDING_DIM, dtype = tf.float32)
         embedding_idx = tf.expand_dims(embedding_idx, 0) # shape [1, EMBEDDING_DIM]
 
@@ -152,8 +154,8 @@ class AttentionBlock(tfnn.Layer):
         self.n_heads = n_heads
         super(AttentionBlock, self).__init__()
         
-        self.padding_mask = self.generate_padding_mask()
-        
+        assert EMBEDDING_DIM % self.n_heads == 0
+                
         initializer = tf.keras.initializers.GlorotUniform()
         
         self.w_q = tf.Variable(initial_value = initializer(shape = [EMBEDDING_DIM, EMBEDDING_DIM]), trainable = True, dtype = tf.float32)
@@ -193,7 +195,7 @@ class AttentionBlock(tfnn.Layer):
         
         return msk 
         
-    def scale_dot_product_with_mask(self, q, k, v, mask):
+    def scale_dot_product_with_mask(self, q, k, v, msk):
         """[summary]
 
         Args:
@@ -207,8 +209,8 @@ class AttentionBlock(tfnn.Layer):
         out = tf.linalg.matmul(q, k, transpose_b = True)
         out = out / tf.math.sqrt(embedding_dim)
         
-        if mask is not None:
-            out = out + mask * (- 1e9) # met un 'poids' de 'moins l'infini' aux endroits du mask ayant un 1 ie les interdits ou <pad>
+        if msk is not None:
+            out = out + msk * (- 1e9) # met un 'poids' de 'moins l'infini' aux endroits du mask ayant un 1 ie les interdits ou <pad>
         
         att = tf.nn.softmax(out, axis = -1)
         out = tf.linalg.matmul(att, v)
@@ -218,17 +220,17 @@ class AttentionBlock(tfnn.Layer):
     
     def split_embedding_into_heads(self, x):
         """x a pour shape [b, seq_length, embedding_dim]
-            ressort x comme [b, n_heads, seq_length, embedding_dim]
+            ressort x comme [b, n_heads, seq_length_new, embedding_dim]
         Args:
             x ([type]): [description]
         """                                     #on met -1 ici, qui ajoute une dimension, de sorte que le nombre de composantes du tenseur reste constant
-        out = tf.reshape(x, shape = [BATCH_SIZE, -1, self.n_heads, EMBEDDING_DIM])
+        out = tf.reshape(x, shape = [BATCH_SIZE, -1, self.n_heads, EMBEDDING_DIM // self.n_heads])
         out = tf.transpose(out, perm = [0, 2, 1, 3])
         
         return out
     
     
-    def call(self, q, k, v, mask):
+    def call(self, q, k, v, msk):
         
         # les inp passent par les memes layers pour chaque head
         q = tf.linalg.matmul(q, self.w_q) + self.b_q
@@ -241,7 +243,7 @@ class AttentionBlock(tfnn.Layer):
         v = self.split_embedding_into_heads(v)
         
         # formule de l'attention
-        out, att = self.scale_dot_product_with_mask(q, k, v, mask) # out shape : [b, nh, s, e] ; att shape : [b, nh, s, s]
+        out, att = self.scale_dot_product_with_mask(q, k, v, msk) # out shape : [b, nh, s, e] ; att shape : [b, nh, s, s]
         
         # un-split de l'out
         out = tf.transpose(out, perm = [0, 2, 1, 3]) # out shape : [b, s, nh, e]
@@ -265,7 +267,7 @@ class FeedForwardBlock(tfnn.Layer):
         """
         self.layers = []
         
-        for _ in range(n_layers):
+        for _ in range(n_layers - 1):
             self.layers.append(tfnn.Dense(hidden_dim, activation = 'relu'))
         self.last_layer = tfnn.Dense(output_dim, activation = 'linear') # juste la pour ajuster la dimension et que ce soit digerable par la suite du model
         
@@ -282,8 +284,168 @@ class FeedForwardBlock(tfnn.Layer):
         return out
 
 
+class EncoderBlock(tfnn.Layer):
+    
+    def __init__(self, n_heads = n_heads, n_layers_ff = 2, hidden_dim_ff = 2048, dropout = 0.1):
+        """On suppose les sequences tokenizées et emmbeded avant le call
+
+        Args:
+            n_heads ([type], optional): [description]. Defaults to n_heads.
+            n_layers_ff (int, optional): [description]. Defaults to 2.
+            hidden_dim_ff (int, optional): [description]. Defaults to 2048.
+            dropout (float, optional): [description]. Defaults to 0.1.
+        """
+        
+        self.A = AttentionBlock(n_heads = n_heads)
+        self.D = tfnn.Dropout(dropout)
+        self.N = tfnn.LayerNormalization(epsilon = EPS_LAYERNORM)
+        
+        self.F = FeedForwardBlock(n_layers = n_layers_ff, hidden_dim = hidden_dim_ff, output_dim = EMBEDDING_DIM)
+        self.N_ = tfnn.LayerNormalization(epsilon = EPS_LAYERNORM)
+        self.D_ = tfnn.Dropout(dropout)
+        
+    def call(self, x, msk, training):
+        
+        out, _ = self.A(x, x, x, msk)
+        
+        out = self.D(out, training = training)
+        out = out + x
+        out = self.N(out)
+        
+        
+        out_ = self.F(out)
+        
+        out_ = self.D_(out_, training = training)
+        out = out_ + out
+        out = self.N_(out)
+        
+        return out
 
 
+
+class DecoderBlock(tfnn.Layer):
+    
+    def __init__(self, 
+                 n_heads = n_heads, 
+                 n_layers_ff = 2, 
+                 hidden_dim_ff = 2048, 
+                 dropout = 0.1):
+        
+        self.A = AttentionBlock(n_heads)
+        self.D = tfnn.Dropout(dropout)
+        self.N = tfnn.LayerNormalization(epsilon = EPS_LAYERNORM)
+        
+        self.A_1 = AttentionBlock(n_heads)
+        self.D_1 = tfnn.Dropout(dropout)
+        self.N_1 = tfnn.LayerNormalization(epsilon = EPS_LAYERNORM)
+        
+        self.F = FeedForwardBlock(n_layers_ff, hidden_dim_ff, output_dim = EMBEDDING_DIM)
+        self.D_2 = tfnn.Dropout(dropout)
+        self.N_2 = tfnn.LayerNormalization(epsilon = EPS_LAYERNORM)
+        
+    def call(self, x, last_enc_x, not_look_ahead_msk, padding_msk, training):
+        
+        out, att = self.A(x, x, x, padding_msk)
+        
+        out = self.D(out)
+        out = out + x
+        out = self.N(out)
+        
+        
+        out_, att_1 = self.A_1(last_enc_x, last_enc_x, out, not_look_ahead_msk)
+        
+        out_ = self.D_1(out_)
+        out = out + out_
+        out = self.N_1(out)
+        
+        
+        out_ = self.F(out)
+        
+        out_ = self.D_2(out_)
+        out = out + out_
+        out = self.N_2(out)
+        
+        return out, att, att_1
+
+
+
+class Encoder(tfnn.Layer):
+    
+    def __init__(self, n_enc_blocks, 
+                 n_heads, 
+                 n_layers_ff = 2, 
+                 hidden_dim_ff = 2048,
+                 dropout = 0.1):
+
+        self.EBD = EmbeddingBlock()
+        self.ECD = [EncoderBlock(n_heads, n_layers_ff, hidden_dim_ff, dropout) for _ in range(n_enc_blocks)]
+        
+        self.D = tfnn.Dropout(dropout)
+        
+        def call(self, tok, msk, training):
+            """les seq sont supposées tokenisées
+
+            Args:
+                tok ([type]): [description]
+                msk ([type]): [description]
+                training ([type]): [description]
+            """
+            
+            out = self.EMB(tok)
+            
+            out = self.D(out)
+            
+            for l in self.ECD:
+                out = l(out)
+            
+            return out
+
+
+
+class Decoder(tfnn.Layer):
+    
+    def __init__(self, n_dec_blocks, 
+                n_heads, 
+                n_layers_ff = 2, 
+                hidden_dim_ff = 2048,
+                dropout = 0.1):               
+            
+        self.E = EmbeddingBlock()
+        self.DCD = [DecoderBlock(n_heads, n_layers_ff, hidden_dim_ff, dropout) for _ in range(n_dec_blocks)]
+        
+        self.D = tfnn.Dropout(dropout)
+        
+    def call(self, tok, last_enc_x, not_look_ahead_msk, padding_msk, training):
+        
+        out = self.E(tok)
+        
+        acc = 0
+        
+        att_w = {} # stockage des attentions weights
+        
+        for l in self.DCD:
+            
+            acc += 1
+
+            out, att, att_1 = l(out)
+            
+            att_w[f'attention_weights_du_block_{acc}_sous_block_0'] = att 
+            att_w[f'attention_weights_du_block_{acc}_sous_block_1'] = att_1 
+
+        return out, att_w
+
+    
+                
+            
+                           
+            
+            
+
+
+        
+        
+         
+        
 
 
 

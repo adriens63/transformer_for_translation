@@ -191,9 +191,12 @@ class TestAttentionBlock(tf.test.TestCase):
         
         cls.A = arch.AttentionBlock(n_heads = n_heads)
         
-        cls.seq_length = 8
+        cls.seq_length = 6
         cls.seq = tf.constant([[5, 3, 0, 0], [2, 3, 3, 0], [2, 4, 7, 0]])
 
+        cls.q = tf.random.uniform(shape = [BATCH_SIZE, cls.seq_length, EMBEDDING_DIM])
+        cls.k = cls.q
+        cls.v = cls.q
         
         return super().setUpClass()
     
@@ -203,8 +206,9 @@ class TestAttentionBlock(tf.test.TestCase):
     
     def test_padding_mask(self):
         
-        xpected = tf.constant([[0, 0, 1, 1], [0, 0, 0, 1], [0, 0, 0, 1]])
-        self.assertEqual(self.A.generate_padding_mask(self.seq), xpected)
+        xpected = tf.constant([[0, 0, 1, 1], [0, 0, 0, 1], [0, 0, 0, 1]], dtype = tf.float32)
+        xpected = xpected[:, tf.newaxis, tf.newaxis, :]
+        self.assertAllEqual(self.A.generate_padding_mask(self.seq), xpected)
     
     def test_not_look_ahead_mask(self):
         
@@ -214,45 +218,42 @@ class TestAttentionBlock(tf.test.TestCase):
                                 [0., 0., 0., 0., 1., 1.],
                                 [0., 0., 0., 0., 0., 1.],
                                 [0., 0., 0., 0., 0., 0.]])
-        self.assertEqual(self.A.generate_not_look_ahead_mask(self.seq_length), xpected)
+        
+        msk = self.A.generate_not_look_ahead_mask(self.seq_length)
+        
+        self.assertEqual((msk == xpected).numpy().all(), True )
     
     def test_attention_formula(self):
         
-        q = tf.random.uniform(shape = [self.seq_length, EMBEDDING_DIM])
-        k = q
-        v = q
 
-        msk = self.A.generate_padding_mask(self.seq)
+        #msk = self.A.generate_padding_mask(q)
         _msk = self.A.generate_not_look_ahead_mask(self.seq_length)
         
-        out, att = self.A.scale_dot_product_with_mask(q, k, v, msk)
-        _out, _att = self.A.scale_dot_product_with_mask(q, k, v, _msk)
+        #out, att = self.A.scale_dot_product_with_mask(self.q, self.k, self.v, msk)
+        _out, _att = self.A.scale_dot_product_with_mask(self.q, self.k, self.v, _msk)
         
-        self.assertShapeEqual(out [self.seq_length, EMBEDDING_DIM])
-        self.assertShapeEqual(_out, [self.seq_length, EMBEDDING_DIM])
+        #self.assertShapeEqual(out [self.seq_length, EMBEDDING_DIM])
+        self.assertEqual(_out.shape.as_list(), [BATCH_SIZE, self.seq_length, EMBEDDING_DIM])
         
-        self.assertShapeEqual(att, [self.seq_length, self.seq_length])
-        self.assertShapeEqual(_att, [self.seq_length, self.seq_length])
+        #self.assertShapeEqual(att, [self.seq_length, self.seq_length])
+        self.assertEqual(_att.get_shape().as_list(), [BATCH_SIZE, self.seq_length, self.seq_length])
         
         # TODO :essayer de print pour voir les 'moins l'infini'
         
     def test_split_into_heads(self):
 
-        q = tf.random.uniform(shape = [BATCH_SIZE, self.seq_length, EMBEDDING_DIM])
-
-        self.assertShapeEqual(self.A.split_embedding_into_heads(q), tf.constant([BATCH_SIZE, n_heads, self.seq_length, EMBEDDING_DIM]))
+        self.assertEqual(self.A.split_embedding_into_heads(self.q).get_shape(), tf.constant([BATCH_SIZE, n_heads, self.seq_length, EMBEDDING_DIM // n_heads]))
 
     # @unittest.expectedFailure
-    # def test_call(self):
+    def test_call(self):
         
-    #     pt, en = next(ds.__iter__())
-        
-    #     x = self.E(pt)
-        
-    #     self.assertEqual(x.shape.as_list()[0], BATCH_SIZE)
-    #     self.assertEqual(len(x.shape.as_list()), 3) # shape de x : [b, s, e]
-    #     self.assertDTypeEqual(x, np.float32)
+        _msk = self.A.generate_not_look_ahead_mask(self.seq_length)
+        out, att = self.A(self.q, self.k, self.v, _msk)
 
+        self.assertEqual(out.get_shape().as_list(), [BATCH_SIZE, self.seq_length, EMBEDDING_DIM])
+        self.assertEqual(att.get_shape().as_list(), [BATCH_SIZE, n_heads, self.seq_length, self.seq_length])
+        
+        
 
 
 
@@ -276,7 +277,6 @@ class TestAttentionBlock(tf.test.TestCase):
 
 
 
-# uncomment ca pour faire marcher le debugger
 
 if __name__ == '__main__':
-    unittest.main()
+    tf.test.main()
