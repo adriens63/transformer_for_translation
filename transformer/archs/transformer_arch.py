@@ -1,6 +1,4 @@
 import tensorflow as tf
-from tensorflow.python.keras.layers.embeddings import Embedding
-import tensorflow_datasets as tfds
 import tensorflow_text as tft
 from tensorflow.keras import layers as tfnn
 

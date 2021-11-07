@@ -9,8 +9,8 @@ import numpy as np
 try:
     import transformer_arch as arch
 except ImportError:
-    cc = None
-    raise ImportError('transformer_arch', ' non importé')
+    arch = None
+    raise ImportError('transformer_arch' + ' non importé')
 
 
 
