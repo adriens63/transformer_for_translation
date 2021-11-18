@@ -6,26 +6,23 @@ import numpy as np
 
 from math import ceil
 
+try:
+    from constants import AUTOTUNE, BATCH_SIZE, BUFFER_SIZE, EMBEDDING_DIM, MAX_SEQ_LENGTH, INPUT_VOCAB_SIZE, TARGET_VOCAB_SIZE, EPS_LAYERNORM
+except ImportError:
+    raise ImportError('constants' + ' non importé')
 
 
 
-# Globales
-AUTOTUNE = tf.data.AUTOTUNE
 
-# Hp globaux
-BATCH_SIZE = 32
-BUFFER_SIZE = 20000
-EMBEDDING_DIM = 512
-MAX_SEQ_LENGTH = 200
-INPUT_VOCAB_SIZE = 8500
-TARGET_VOCAB_SIZE = 8000
-EPS_LAYERNORM = 1e-6
 
-# Les autres ne sont pas globaux, et devront être passés en param : num_heads, dff
+# ***************** parametres ******************** 
 n_heads = 8
 
 
-## Blocks
+
+
+
+# ******************* blocks *********************
 
 class TokenizerBlock:
     
@@ -39,6 +36,7 @@ class TokenizerBlock:
         self.tokenizer_a = tokenizer_a
         self.tokenizer_b = tokenizer_b
     
+
     def prepare_dataset(self, dataset):
         
         def twofold_tokenization(a, b):
@@ -67,6 +65,10 @@ class TokenizerBlock:
         
 
 class EmbeddingBlock_0(tfnn.Layer):
+    """
+    Ne marche pas, mais la version d'après si
+    """
+
     def __init__(self):
         
         super(EmbeddingBlock_0, self).__init__()
@@ -77,6 +79,7 @@ class EmbeddingBlock_0(tfnn.Layer):
         temp = 1 / np.power(10000, (2 * (i // 2)) / np.float32(EMBEDDING_DIM) )
         return pos * temp
     
+
     def position_embedding(self):
         temp = tf.range(start = 0, limit = MAX_SEQ_LENGTH)
         temp = tf.expand_dims(temp, axis = -1)
@@ -89,9 +92,6 @@ class EmbeddingBlock_0(tfnn.Layer):
         
 
 
-
-
-
 class EmbeddingBlock(tfnn.Layer):
     
     def __init__(self):
@@ -99,11 +99,13 @@ class EmbeddingBlock(tfnn.Layer):
         super(EmbeddingBlock, self).__init__()
         self.token_embedding = tfnn.Embedding(input_dim = INPUT_VOCAB_SIZE, output_dim = EMBEDDING_DIM, )
 
+
     @staticmethod
     def vector_angles(pos, i):
         temp = 1 / tf.math.pow(10000, (2 * (i//2)) / np.float32(EMBEDDING_DIM))
         return tf.linalg.matmul(pos, temp) # multiplie shape [seq_length, 1] par [1, EMBEDDING_DIM]
     
+
     def position_embedding(self, seq_length):
         """creer la matrices des positions embedding d'UNE sequence, donc on obtient la shape
         [seq_length, EMBEDDING_DIM], reste à la tile dans le call pour obtenir [BATCH_SIZE, seq_length, EMBEDDING_DIM]
@@ -125,18 +127,27 @@ class EmbeddingBlock(tfnn.Layer):
         angles = self.vector_angles(pos, embedding_idx)
         
         cond = tf.constant([True, False])
-        cond = tf.expand_dims(cond, -1)
+        cond = tf.expand_dims(cond, -1) # shape [2, 1]
         cond = tf.tile(cond, tf.constant([ceil(EMBEDDING_DIM // 2) , seq_length]))
-        cond = tf.transpose(cond) # shape [seq_length, EMBEDDING_DIM]
+        cond = tf.transpose(cond) # shape [seq_length, EMBEDDING_DIM] permet d'avoir une colonne False sur deux
         
         return tf.where(cond, tf.math.sin(angles), tf.math.cos(angles)) # [seq_length, EMBEDDING_DIM]
         
+
     def call(self, tok):
+        """[summary]
+
+        Args:
+            tok ([type]): tokenized_sequences, [b, s, e]
+
+        Returns:
+            [type]: [description]
+        """
         
         tok = self.token_embedding(tok)
         out = self.position_embedding(tok.get_shape()[-2]) # seq_length est à la -2e position
         
-        out = tf.expand_dims(out, axis = 0) # il faudrait trouver un moyen de cache ces position_embedding, meme si elles changent à chaque seq car seq_length change, il faudrait les compute avec MAX_SEQ_LENGTH puis tronquer
+        out = tf.expand_dims(out, axis = 0) # TODO il faudrait trouver un moyen de cache ces position_embedding, meme si elles changent à chaque seq car seq_length change, il faudrait les compute avec MAX_SEQ_LENGTH puis tronquer
         out = tf.tile(out, tf.constant([BATCH_SIZE, 1, 1]))
         
         out = out + tok # rectfié -> il n'ont pas la meme shape, peut etre erreur
@@ -168,6 +179,7 @@ class AttentionBlock(tfnn.Layer):
         self.w   = tf.Variable(initial_value = initializer(shape = [EMBEDDING_DIM, EMBEDDING_DIM]), trainable = True, dtype = tf.float32)
         self.b   = tf.Variable(initial_value = initializer(shape = (EMBEDDING_DIM,)), trainable = True, dtype = tf.float32)
 
+
     def generate_padding_mask(self, seq):
         """fait en sorte que le model ne prenne pas le padding comme une input
         les 0 (token associé au padding) sont repérés par des 1 dans le mask
@@ -181,6 +193,7 @@ class AttentionBlock(tfnn.Layer):
         
         return msk
     
+
     def generate_not_look_ahead_mask(self, seq_length):
         """Pareil, il y a des 0 là ou le modèle peut regarder, et des 1 ailleurs
 
@@ -193,6 +206,7 @@ class AttentionBlock(tfnn.Layer):
         
         return msk 
         
+
     def scale_dot_product_with_mask(self, q, k, v, msk):
         """[summary]
 
@@ -282,6 +296,7 @@ class FeedForwardBlock(tfnn.Layer):
         return out
 
 
+
 class EncoderBlock(tfnn.Layer):
     
     def __init__(self, n_heads = n_heads, n_layers_ff = 2, hidden_dim_ff = 2048, dropout = 0.1):
@@ -302,6 +317,7 @@ class EncoderBlock(tfnn.Layer):
         self.N_ = tfnn.LayerNormalization(epsilon = EPS_LAYERNORM)
         self.D_ = tfnn.Dropout(dropout)
         
+
     def call(self, x, msk, training):
         
         out, _ = self.A(x, x, x, msk)
@@ -341,29 +357,30 @@ class DecoderBlock(tfnn.Layer):
         self.D_2 = tfnn.Dropout(dropout)
         self.N_2 = tfnn.LayerNormalization(epsilon = EPS_LAYERNORM)
         
+
     def call(self, x, last_enc_x, not_look_ahead_msk, padding_msk, training):
         
         out, att = self.A(x, x, x, padding_msk)
         
-        out = self.D(out)
+        out = self.D(out, training = training)
         out = out + x
         out = self.N(out)
         
         
-        out_, att_1 = self.A_1(last_enc_x, last_enc_x, out, not_look_ahead_msk)
+        out_, att_ = self.A_1(last_enc_x, last_enc_x, out, not_look_ahead_msk)
         
-        out_ = self.D_1(out_)
+        out_ = self.D_1(out_, training = training)
         out = out + out_
         out = self.N_1(out)
         
         
         out_ = self.F(out)
         
-        out_ = self.D_2(out_)
+        out_ = self.D_2(out_, training = training)
         out = out + out_
         out = self.N_2(out)
         
-        return out, att, att_1
+        return out, att, att_
 
 
 
@@ -379,24 +396,25 @@ class Encoder(tfnn.Layer):
         self.ECD = [EncoderBlock(n_heads, n_layers_ff, hidden_dim_ff, dropout) for _ in range(n_enc_blocks)]
         
         self.D = tfnn.Dropout(dropout)
-        
-        def call(self, tok, msk, training):
-            """les seq sont supposées tokenisées
+    
+    
+    def call(self, tok, msk, training):
+        """les seq sont supposées tokenisées
 
-            Args:
-                tok ([type]): [description]
-                msk ([type]): [description]
-                training ([type]): [description]
-            """
-            
-            out = self.EMB(tok)
-            
-            out = self.D(out)
-            
-            for l in self.ECD:
-                out = l(out)
-            
-            return out
+        Args:
+            tok ([type]): [description]
+            msk ([type]): [description]
+            training ([type]): [description]
+        """
+        
+        out = self.EMB(tok)
+        
+        out = self.D(out, training = training)
+        
+        for l in self.ECD:
+            out = l(out, msk, training = training)
+        
+        return out
 
 
 
@@ -413,6 +431,7 @@ class Decoder(tfnn.Layer):
         
         self.D = tfnn.Dropout(dropout)
         
+
     def call(self, tok, last_enc_x, not_look_ahead_msk, padding_msk, training):
         
         out = self.E(tok)
@@ -425,7 +444,7 @@ class Decoder(tfnn.Layer):
             
             acc += 1
 
-            out, att, att_1 = l(out)
+            out, att, att_1 = l(out, last_enc_x, not_look_ahead_msk, padding_msk, training = training)
             
             att_w[f'attention_weights_du_block_{acc}_sous_block_0'] = att 
             att_w[f'attention_weights_du_block_{acc}_sous_block_1'] = att_1 

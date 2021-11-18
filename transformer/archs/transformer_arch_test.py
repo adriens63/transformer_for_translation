@@ -5,27 +5,24 @@ import tensorflow_text as tft
 import tensorflow as tf
 import numpy as np
 
-
 try:
     import transformer_arch as arch
 except ImportError:
     arch = None
     raise ImportError('transformer_arch' + ' non importé')
 
+try:
+    from constants import AUTOTUNE, BATCH_SIZE, BUFFER_SIZE, EMBEDDING_DIM, MAX_SEQ_LENGTH, INPUT_VOCAB_SIZE, TARGET_VOCAB_SIZE, EPS_LAYERNORM
+except ImportError:
+    raise ImportError('constants' + ' non importé')
 
 
 
 
-# Globales
-# Hp globaux
-BATCH_SIZE = arch.BATCH_SIZE
-BUFFER_SIZE = arch.BUFFER_SIZE
-EMBEDDING_DIM = arch.EMBEDDING_DIM
-MAX_SEQ_LENGTH = arch.MAX_SEQ_LENGTH
-INPUT_VOCAB_SIZE = arch.INPUT_VOCAB_SIZE
-TARGET_VOCAB_SIZE = arch.TARGET_VOCAB_SIZE
 
 n_heads = arch.n_heads
+
+
 
 
 
@@ -71,15 +68,19 @@ class TestTokenizerBlock_0(unittest.TestCase):
         cls.t_b = arch.TokenizerBlock(tokenizers.pt, tokenizers.en)
         cls.ds = cls.t_b.prepare_dataset(train_examples)
 
+
     @classmethod
     def tearDownClass(cls) -> None:
         pass
 
+
     def setUp(self):
         pass
     
+    
     def tearDown(self) -> None:
         pass
+        
         
     def test_prepare_dataset(self):
         
@@ -104,15 +105,19 @@ class TestTokenizerBlock(tf.test.TestCase):
         cls.T = arch.TokenizerBlock(tokenizers.pt, tokenizers.en)
         cls.ds = cls.T.prepare_dataset(train_examples)
 
+
     @classmethod
     def tearDownClass(cls) -> None:
         pass
 
+
     def setUp(self):
         pass
     
+    
     def tearDown(self) -> None:
         pass
+        
         
     def test_prepare_dataset(self):
         
@@ -153,9 +158,11 @@ class TestEmbeddingBlock(tf.test.TestCase):
         
         return super().setUpClass()
     
+    
     @classmethod
     def tearDownClass(cls) -> None:
         pass
+    
     
     #@unittest.expectedFailure
     def test_call(self):
@@ -200,15 +207,18 @@ class TestAttentionBlock(tf.test.TestCase):
         
         return super().setUpClass()
     
+    
     @classmethod
     def tearDownClass(cls) -> None:
         pass
+    
     
     def test_padding_mask(self):
         
         xpected = tf.constant([[0, 0, 1, 1], [0, 0, 0, 1], [0, 0, 0, 1]], dtype = tf.float32)
         xpected = xpected[:, tf.newaxis, tf.newaxis, :]
         self.assertAllEqual(self.A.generate_padding_mask(self.seq), xpected)
+    
     
     def test_not_look_ahead_mask(self):
         
@@ -222,6 +232,7 @@ class TestAttentionBlock(tf.test.TestCase):
         msk = self.A.generate_not_look_ahead_mask(self.seq_length)
         
         self.assertEqual((msk == xpected).numpy().all(), True )
+    
     
     def test_attention_formula(self):
         
@@ -240,9 +251,11 @@ class TestAttentionBlock(tf.test.TestCase):
         
         # TODO :essayer de print pour voir les 'moins l'infini'
         
+        
     def test_split_into_heads(self):
 
         self.assertEqual(self.A.split_embedding_into_heads(self.q).get_shape(), tf.constant([BATCH_SIZE, n_heads, self.seq_length, EMBEDDING_DIM // n_heads]))
+
 
     # @unittest.expectedFailure
     def test_call(self):
